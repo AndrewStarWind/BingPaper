@@ -88,7 +88,40 @@ public struct WallpaperApplier: Sendable {
             try? await Task.sleep(for: .milliseconds(350))
         }
 
+        // Capture current desktop image URLs before restarting WallpaperAgent if we're in Lock Screen Only mode
+        // so the temporary backdrop keeps the user's current desktop visible with zero gray flash.
+        let lockScreenOnlyFallbackURLs: [CGDirectDisplayID: URL] = await MainActor.run {
+            guard target == .lockScreenOnly else { return [:] }
+            var map: [CGDirectDisplayID: URL] = [:]
+            for screen in NSScreen.screens {
+                if let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+                   let currentURL = NSWorkspace.shared.desktopImageURL(for: screen),
+                   Self.isReadableImageFile(at: currentURL) {
+                    map[displayID] = currentURL
+                }
+            }
+            return map
+        }
+
+        let backdrop = await MainActor.run { SeamlessBackdropController() }
+
         do {
+            // Cover the desktop layer right before restarting WallpaperAgent so the brief WindowServer void is never visible.
+            await MainActor.run {
+                backdrop.show(imageForScreen: { screen in
+                    if target == .lockScreenOnly {
+                        guard let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else {
+                            return nil
+                        }
+                        return lockScreenOnlyFallbackURLs[displayID]
+                    }
+                    return imageURL
+                }, scalingMode: scalingMode)
+            }
+            // Give WindowServer one frame to composite the backdrop before killing WallpaperAgent.
+            try? await Task.sleep(for: .milliseconds(60))
+
+            let previousAgentPID = Self.currentWallpaperAgentPID()
             let result = try indexUpdater.applyWallpaper(
                 imageURL: imageURL,
                 scalingMode: scalingMode,
@@ -96,6 +129,9 @@ public struct WallpaperApplier: Sendable {
                 backupDirectory: backupDirectory
             )
             Self.reloadWallpaperAgent()
+            await Self.waitForWallpaperAgentReady(previousPID: previousAgentPID)
+            await backdrop.fadeOutAndClose(duration: 0.25)
+
             BingPaperLog.wallpaper.info("Synced Index.plist (\(target.rawValue)) across \(result.scopesUpdated) scope(s) and reloaded WallpaperAgent.")
             return WallpaperApplyReport(
                 imagePath: imageURL.path,
@@ -105,6 +141,7 @@ public struct WallpaperApplier: Sendable {
                 indexScopesUpdated: result.scopesUpdated
             )
         } catch {
+            await MainActor.run { backdrop.tearDownImmediately() }
             if target == .lockScreenOnly {
                 throw error
             }
@@ -159,5 +196,54 @@ public struct WallpaperApplier: Sendable {
         } catch {
             BingPaperLog.wallpaper.warning("Failed to restart WallpaperAgent: \(error.localizedDescription)")
         }
+    }
+
+    private static func currentWallpaperAgentPID() -> pid_t? {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        process.arguments = ["-x", "WallpaperAgent"]
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = Pipe()
+        do {
+            try process.run()
+            process.waitUntilExit()
+            guard process.terminationStatus == 0 else { return nil }
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            guard let text = String(data: data, encoding: .utf8)?
+                .split(whereSeparator: \.isNewline)
+                .first,
+                  let pid = Int32(text.trimmingCharacters(in: .whitespaces)) else {
+                return nil
+            }
+            return pid
+        } catch {
+            return nil
+        }
+    }
+
+    /// Waits for launchd to respawn `WallpaperAgent` with a new PID and allows time for `WallpaperImageExtension`
+    /// to finish rendering the updated wallpaper underneath our seamless backdrop.
+    private static func waitForWallpaperAgentReady(previousPID: pid_t?) async {
+        let deadline = Date().addingTimeInterval(2.0)
+        while Date() < deadline {
+            if let currentPID = currentWallpaperAgentPID(), currentPID != previousPID {
+                break
+            }
+            try? await Task.sleep(for: .milliseconds(50))
+        }
+        // Allow WallpaperImageExtension ~650ms to finish decoding and compositing the new image.
+        try? await Task.sleep(for: .milliseconds(650))
+    }
+
+    private static func isReadableImageFile(at url: URL) -> Bool {
+        var isDir: ObjCBool = false
+        guard url.isFileURL,
+              FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir),
+              !isDir.boolValue else {
+            return false
+        }
+        let ext = url.pathExtension.lowercased()
+        return ["jpg", "jpeg", "png", "heic", "tiff", "webp"].contains(ext)
     }
 }

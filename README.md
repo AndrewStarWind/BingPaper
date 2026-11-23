@@ -24,7 +24,7 @@ Most Bing wallpaper apps break on modern macOS — leaving inactive Spaces stale
 
 ## Install
 
-Download `BingPaper-v1.1.0-macos.zip` from [Releases](../../releases), unzip, and drag `BingPaper.app` to `/Applications`.
+Download `BingPaper-v1.1.1-macos.zip` from [Releases](../../releases), unzip, and drag `BingPaper.app` to `/Applications`.
 
 > First launch (ad-hoc signed): right-click `BingPaper.app` → **Open**.
 
