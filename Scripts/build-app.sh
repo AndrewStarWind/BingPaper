@@ -4,8 +4,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="BingPaper"
 BUNDLE_ID="com.bingpaper.app"
-VERSION="1.0.0"
-BUILD_NUMBER="1"
+VERSION="1.1.0"
+BUILD_NUMBER="2"
 
 DIST_DIR="$ROOT_DIR/dist"
 APP_BUNDLE="$DIST_DIR/$APP_NAME.app"

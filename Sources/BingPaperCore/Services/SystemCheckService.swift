@@ -135,24 +135,13 @@ public struct SystemCheckService: Sendable {
             ))
         }
 
-        // 3. Sync All Spaces & Lock Screen setting
-        if settings.syncAllSpacesAndLockScreen {
-            items.append(SystemCheckItem(
-                id: "lock-screen-sync",
-                title: "All Screens, Spaces & Lock Screen Sync",
-                detail: "Enabled — updates every display, inactive Spaces, and the Lock Screen together.",
-                severity: .ok
-            ))
-        } else {
-            items.append(SystemCheckItem(
-                id: "lock-screen-sync",
-                title: "All Screens, Spaces & Lock Screen Sync",
-                detail: "Disabled — only active desktop Spaces will update; Lock Screen may stay on the previous wallpaper.",
-                severity: .warning,
-                fixAction: .enableLockScreenSync,
-                fixLabel: "Enable Sync"
-            ))
-        }
+        // 3. Selected wallpaper target
+        items.append(SystemCheckItem(
+            id: "wallpaper-target",
+            title: "Wallpaper Target: \(settings.wallpaperTarget.displayName)",
+            detail: settings.wallpaperTarget.descriptionText,
+            severity: .ok
+        ))
 
         // 4. Daily Schedule setting
         if settings.dailyUpdateEnabled {

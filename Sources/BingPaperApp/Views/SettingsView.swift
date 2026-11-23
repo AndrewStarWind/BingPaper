@@ -172,12 +172,16 @@ struct SettingsView: View {
                 }
             }
 
-            Section("Displays, Spaces & Lock Screen") {
-                Toggle("Sync every display, all Spaces & Lock Screen", isOn: $viewModel.settings.syncAllSpacesAndLockScreen)
+            Section("Apply To") {
+                Picker("Target", selection: $viewModel.settings.wallpaperTarget) {
+                    ForEach(WallpaperTarget.allCases) { target in
+                        Text(target.displayName).tag(target)
+                    }
+                }
 
                 Toggle("Re-apply automatically when monitors are connected", isOn: $viewModel.settings.reapplyOnDisplayChange)
 
-                Text("BingPaper updates every connected display via NSWorkspace and synchronizes macOS's WallpaperAgent store (Index.plist) across all Spaces and the Lock Screen. Note: When FileVault is enabled, macOS protects the pre-boot unlock screen until first login.")
+                Text(viewModel.settings.wallpaperTarget.descriptionText)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

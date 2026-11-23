@@ -17,7 +17,7 @@ struct SystemCheckServiceTests {
         let service = SystemCheckService()
         let report = service.evaluate(
             settings: AppSettings(
-                syncAllSpacesAndLockScreen: true,
+                wallpaperTarget: .allScreensAndLockScreen,
                 dailyUpdateEnabled: true,
                 updateHour: 9,
                 updateMinute: 0
@@ -32,7 +32,7 @@ struct SystemCheckServiceTests {
         #expect(report.items.count == 5)
     }
 
-    @Test("Flags missing Index.plist, disabled sync, disabled daily schedule, and off Login Item")
+    @Test("Flags missing Index.plist, disabled daily schedule, and off Login Item")
     func flagsMissingPrerequisites() {
         let missingIndex = FileManager.default.temporaryDirectory
             .appendingPathComponent("does-not-exist-\(UUID().uuidString).plist")
@@ -40,7 +40,7 @@ struct SystemCheckServiceTests {
         let service = SystemCheckService()
         let report = service.evaluate(
             settings: AppSettings(
-                syncAllSpacesAndLockScreen: false,
+                wallpaperTarget: .screensAndSpacesOnly,
                 dailyUpdateEnabled: false
             ),
             launchStatus: .disabled,
@@ -49,9 +49,31 @@ struct SystemCheckServiceTests {
         )
 
         #expect(report.allChecksPassed == false)
-        #expect(report.issueCount == 4)
-        #expect(report.items.contains { $0.id == "lock-screen-sync" && $0.fixAction == .enableLockScreenSync })
+        #expect(report.issueCount == 3)
         #expect(report.items.contains { $0.id == "daily-schedule" && $0.fixAction == .enableDailySchedule })
         #expect(report.items.contains { $0.id == "launch-at-login" && $0.fixAction == .enableLaunchAtLogin })
+    }
+
+    @Test("Migrates legacy syncAllSpacesAndLockScreen setting into wallpaperTarget")
+    func migratesLegacySettingsJSON() throws {
+        let legacyFalseJSON = Data("""
+        {
+          "market": "en-US",
+          "preferUHD": true,
+          "scalingMode": "fill",
+          "syncAllSpacesAndLockScreen": false,
+          "dailyUpdateEnabled": true,
+          "updateHour": 8,
+          "updateMinute": 30,
+          "retentionDays": 14,
+          "sendNotifications": false,
+          "reapplyOnDisplayChange": true
+        }
+        """.utf8)
+
+        let decoded = try JSONDecoder().decode(AppSettings.self, from: legacyFalseJSON)
+        #expect(decoded.wallpaperTarget == .screensAndSpacesOnly)
+        #expect(decoded.updateHour == 8)
+        #expect(decoded.updateMinute == 30)
     }
 }

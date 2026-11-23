@@ -162,7 +162,7 @@ final class WallpaperViewModel {
         case .enableDailySchedule:
             settings.dailyUpdateEnabled = true
         case .enableLockScreenSync:
-            settings.syncAllSpacesAndLockScreen = true
+            settings.wallpaperTarget = .allScreensAndLockScreen
         case .openWallpaperSettings:
             openWallpaperSystemSettings()
         }
@@ -292,7 +292,7 @@ final class WallpaperViewModel {
             let report = try await applier.applyWallpaper(
                 at: entry.fileURL,
                 scalingMode: settings.scalingMode,
-                syncAllSpacesAndLockScreen: settings.syncAllSpacesAndLockScreen,
+                target: settings.wallpaperTarget,
                 backupDirectory: store.backupsDirectory
             )
             let now = Date()
@@ -412,14 +412,16 @@ final class WallpaperViewModel {
             entry = try store.saveImage(data, metadata: metadata, market: market, preferUHD: settings.preferUHD)
         }
 
-        statusMessage = settings.syncAllSpacesAndLockScreen
-            ? "Updating all screens & Lock Screen…"
-            : "Updating displays…"
+        statusMessage = switch settings.wallpaperTarget {
+        case .allScreensAndLockScreen: "Updating all screens & Lock Screen…"
+        case .screensAndSpacesOnly: "Updating screens & Spaces…"
+        case .lockScreenOnly: "Updating Lock Screen…"
+        }
 
         let report = try await applier.applyWallpaper(
             at: entry.fileURL,
             scalingMode: settings.scalingMode,
-            syncAllSpacesAndLockScreen: settings.syncAllSpacesAndLockScreen,
+            target: settings.wallpaperTarget,
             backupDirectory: store.backupsDirectory
         )
 
@@ -453,10 +455,14 @@ final class WallpaperViewModel {
 
     private func summaryStatus(from report: WallpaperApplyReport) -> String {
         let displayWord = report.screensUpdated == 1 ? "display" : "displays"
-        if report.allSpacesAndLockScreenSynced {
+        switch report.target {
+        case .allScreensAndLockScreen:
             return "\(report.screensUpdated) \(displayWord), all Spaces & Lock Screen synced"
+        case .screensAndSpacesOnly:
+            return "\(report.screensUpdated) \(displayWord) & all Spaces synced"
+        case .lockScreenOnly:
+            return "Lock Screen updated"
         }
-        return "\(report.screensUpdated) active \(displayWord) updated"
     }
 
     private func isDailyUpdateDue(now: Date = Date()) -> Bool {
@@ -552,7 +558,7 @@ final class WallpaperViewModel {
                     _ = try? await self.applier.applyWallpaper(
                         at: current.fileURL,
                         scalingMode: self.settings.scalingMode,
-                        syncAllSpacesAndLockScreen: self.settings.syncAllSpacesAndLockScreen,
+                        target: self.settings.wallpaperTarget,
                         backupDirectory: self.store.backupsDirectory
                     )
                 }
@@ -595,7 +601,8 @@ final class WallpaperViewModel {
             }
         }
 
-        if old.scalingMode != new.scalingMode, let current = currentEntry {
+        if (old.scalingMode != new.scalingMode || old.wallpaperTarget != new.wallpaperTarget),
+           let current = currentEntry {
             Task {
                 await applyHistoryEntry(current)
             }

@@ -14,10 +14,10 @@ A native macOS menu bar application built with **Swift 6** and **SwiftUI** (targ
 
 ## Features
 
-- **Every Screen, Every Space & Lock Screen**:
-  - Updates every connected display immediately via `NSWorkspace.shared.setDesktopImageURL`.
-  - Synchronizes macOS's native `WallpaperAgent` store (`~/Library/Application Support/com.apple.wallpaper/Store/Index.plist`) across `AllSpacesAndDisplays`, `SystemDefault`, all `Displays`, and all `Spaces` using macOS 27's native binary plist schema, then restarts `WallpaperAgent` so inactive Spaces and the Lock Screen stay in sync.
-  - Preserves your Screen Saver (`Idle`) setting and saves a one-time initial backup of your original `Index.plist` in `~/Library/Application Support/BingPaper/Backups/`.
+- **Flexible Target Selection (Screens, Spaces & Lock Screen)**:
+  - Choose in Settings → **Wallpaper** whether to apply Bing's daily image to **All Screens, Spaces & Lock Screen**, **Screens & Spaces Only**, or **Lock Screen Only**.
+  - Updates connected displays via `NSWorkspace.shared.setDesktopImageURL` and synchronizes macOS's native `WallpaperAgent` store (`~/Library/Application Support/com.apple.wallpaper/Store/Index.plist`) using macOS 27's native binary plist schema, then restarts `WallpaperAgent`.
+  - Preserves your non-BingPaper Screen Saver (`Idle`) setting and saves a one-time initial backup of your original `Index.plist` in `~/Library/Application Support/BingPaper/Backups/`.
   - Automatically re-applies today's wallpaper when external monitors are connected or rearranged.
 - **Automatic Daily Updates**:
   - Runs at your chosen daily schedule time (default `09:00`).
@@ -34,7 +34,7 @@ A native macOS menu bar application built with **Swift 6** and **SwiftUI** (targ
 
 ## Download
 
-Grab the latest pre-built `BingPaper-v1.0.0-macos.zip` from the [Releases](../../releases) page, unzip it, and move `BingPaper.app` to `/Applications`.
+Grab the latest pre-built `BingPaper-v1.1.0-macos.zip` from the [Releases](../../releases) page, unzip it, and move `BingPaper.app` to `/Applications`.
 
 > **Note:** Because the release build is ad-hoc signed, if macOS Gatekeeper warns on first launch, right-click `BingPaper.app` → **Open**, or build locally from source below.
 

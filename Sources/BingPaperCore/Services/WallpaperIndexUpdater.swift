@@ -30,7 +30,10 @@ public enum WallpaperIndexError: LocalizedError, Sendable, Equatable {
 }
 
 /// Reads and updates macOS 14+ (Sonoma / Sequoia / Tahoe / macOS 27) `com.apple.wallpaper/Store/Index.plist`
-/// so that the wallpaper is synchronized across every display, every Space (active and inactive), and the Lock Screen.
+/// according to the selected `WallpaperTarget`:
+/// - `.allScreensAndLockScreen`: updates `Desktop` across all displays, Spaces, `AllSpacesAndDisplays`, and `SystemDefault`
+/// - `.screensAndSpacesOnly`: updates `Desktop` only across `Displays` and `Spaces`, leaving `SystemDefault`, `AllSpacesAndDisplays`, and `Idle` untouched
+/// - `.lockScreenOnly`: updates only `Idle` (Lock Screen / Screen Saver) across all scopes, leaving every `Desktop` slot untouched
 public struct WallpaperIndexUpdater: Sendable {
     public static let imageProviderID = "com.apple.wallpaper.choice.image"
 
@@ -112,12 +115,12 @@ public struct WallpaperIndexUpdater: Sendable {
         )
     }
 
-    /// Updates `Index.plist` across `AllSpacesAndDisplays`, `SystemDefault`, `Displays`, and `Spaces`
-    /// so every monitor, Space, and the Lock Screen display `imageURL`.
+    /// Updates `Index.plist` according to `target`.
     @discardableResult
     public func applyWallpaper(
         imageURL: URL,
         scalingMode: WallpaperScalingMode = .fillScreen,
+        target: WallpaperTarget = .allScreensAndLockScreen,
         toIndexAt indexURL: URL = WallpaperIndexUpdater.defaultIndexURL,
         backupDirectory: URL? = nil,
         now: Date = Date()
@@ -159,6 +162,7 @@ public struct WallpaperIndexUpdater: Sendable {
         // macOS 15–27 WallpaperImageExtension throws NSCocoaErrorDomain 4865 if Files contains legacy relative entries;
         // static image choices must use Files = [] and store the URL inside Configuration.
         choice["Files"] = [[String: Any]]()
+
         let encodedOptionValues: Data
         if let nativeOptions = extractedNative?.encodedOptionValues {
             encodedOptionValues = nativeOptions
@@ -170,33 +174,40 @@ public struct WallpaperIndexUpdater: Sendable {
 
         var scopesUpdated = 0
 
-        if var allSpaces = root["AllSpacesAndDisplays"] as? [String: Any] {
-            allSpaces = Self.updateScopeDictionary(
-                allSpaces,
-                choice: choice,
-                encodedOptionValues: encodedOptionValues,
-                now: now
-            )
-            root["AllSpacesAndDisplays"] = allSpaces
-            scopesUpdated += 1
-        } else {
-            root["AllSpacesAndDisplays"] = Self.makeFreshScopeDictionary(
-                choice: choice,
-                encodedOptionValues: encodedOptionValues,
-                now: now
-            )
-            scopesUpdated += 1
-        }
+        // AllSpacesAndDisplays & SystemDefault are updated for `.allScreensAndLockScreen` and `.lockScreenOnly`,
+        // but intentionally skipped for `.screensAndSpacesOnly` so Lock Screen / system defaults remain untouched.
+        if target != .screensAndSpacesOnly {
+            if var allSpaces = root["AllSpacesAndDisplays"] as? [String: Any] {
+                allSpaces = Self.updateScopeDictionary(
+                    allSpaces,
+                    target: target,
+                    choice: choice,
+                    encodedOptionValues: encodedOptionValues,
+                    now: now
+                )
+                root["AllSpacesAndDisplays"] = allSpaces
+                scopesUpdated += 1
+            } else {
+                root["AllSpacesAndDisplays"] = Self.makeFreshScopeDictionary(
+                    target: target,
+                    choice: choice,
+                    encodedOptionValues: encodedOptionValues,
+                    now: now
+                )
+                scopesUpdated += 1
+            }
 
-        if var systemDefault = root["SystemDefault"] as? [String: Any] {
-            systemDefault = Self.updateScopeDictionary(
-                systemDefault,
-                choice: choice,
-                encodedOptionValues: encodedOptionValues,
-                now: now
-            )
-            root["SystemDefault"] = systemDefault
-            scopesUpdated += 1
+            if var systemDefault = root["SystemDefault"] as? [String: Any] {
+                systemDefault = Self.updateScopeDictionary(
+                    systemDefault,
+                    target: target,
+                    choice: choice,
+                    encodedOptionValues: encodedOptionValues,
+                    now: now
+                )
+                root["SystemDefault"] = systemDefault
+                scopesUpdated += 1
+            }
         }
 
         if var displays = root["Displays"] as? [String: Any] {
@@ -204,6 +215,7 @@ public struct WallpaperIndexUpdater: Sendable {
                 if var displayScope = value as? [String: Any] {
                     displayScope = Self.updateScopeDictionary(
                         displayScope,
+                        target: target,
                         choice: choice,
                         encodedOptionValues: encodedOptionValues,
                         now: now
@@ -223,6 +235,7 @@ public struct WallpaperIndexUpdater: Sendable {
                 if var defaultScope = spaceEntry["Default"] as? [String: Any] {
                     defaultScope = Self.updateScopeDictionary(
                         defaultScope,
+                        target: target,
                         choice: choice,
                         encodedOptionValues: encodedOptionValues,
                         now: now
@@ -237,6 +250,7 @@ public struct WallpaperIndexUpdater: Sendable {
                         if var displayScope = displayValue as? [String: Any] {
                             displayScope = Self.updateScopeDictionary(
                                 displayScope,
+                                target: target,
                                 choice: choice,
                                 encodedOptionValues: encodedOptionValues,
                                 now: now
@@ -281,8 +295,6 @@ public struct WallpaperIndexUpdater: Sendable {
         let encodedOptionValues: Data?
     }
 
-    /// Searches `Index.plist` for a native `Desktop` choice matching `uri` in either `Configuration` (binary plist)
-    /// or `Files`, preferring entries that also carry a valid binary plist `EncodedOptionValues` Data blob.
     private static func findNativeChoice(matchingFileURI uri: String, in node: Any) -> ExtractedNativeChoice? {
         var fallbackMatch: ExtractedNativeChoice?
         findNativeChoiceRecursive(matchingFileURI: uri, in: node, fallback: &fallbackMatch)
@@ -296,17 +308,19 @@ public struct WallpaperIndexUpdater: Sendable {
     ) {
         guard let dict = node as? [String: Any] else { return }
 
-        if let desktop = dict["Desktop"] as? [String: Any],
-           let content = desktop["Content"] as? [String: Any],
-           let choices = content["Choices"] as? [[String: Any]] {
-            for choice in choices where choiceMatchesURI(choice, targetURI: uri) {
-                let optionsData = content["EncodedOptionValues"] as? Data
-                let candidate = ExtractedNativeChoice(choice: choice, encodedOptionValues: optionsData)
-                if let optionsData, !optionsData.isEmpty {
-                    fallback = candidate
-                    return
-                } else if fallback == nil {
-                    fallback = candidate
+        for slotKey in ["Desktop", "Idle"] {
+            if let slot = dict[slotKey] as? [String: Any],
+               let content = slot["Content"] as? [String: Any],
+               let choices = content["Choices"] as? [[String: Any]] {
+                for choice in choices where choiceMatchesURI(choice, targetURI: uri) {
+                    let optionsData = content["EncodedOptionValues"] as? Data
+                    let candidate = ExtractedNativeChoice(choice: choice, encodedOptionValues: optionsData)
+                    if let optionsData, !optionsData.isEmpty {
+                        fallback = candidate
+                        return
+                    } else if fallback == nil {
+                        fallback = candidate
+                    }
                 }
             }
         }
@@ -319,17 +333,18 @@ public struct WallpaperIndexUpdater: Sendable {
         }
     }
 
-    /// Finds any existing valid `EncodedOptionValues` Data blob belonging to a `com.apple.wallpaper.choice.image` entry.
     private static func findAnyImageEncodedOptionValues(in node: Any) -> Data? {
         guard let dict = node as? [String: Any] else { return nil }
 
-        if let desktop = dict["Desktop"] as? [String: Any],
-           let content = desktop["Content"] as? [String: Any],
-           let choices = content["Choices"] as? [[String: Any]],
-           choices.contains(where: { ($0["Provider"] as? String) == imageProviderID }),
-           let optionsData = content["EncodedOptionValues"] as? Data,
-           !optionsData.isEmpty {
-            return optionsData
+        for slotKey in ["Desktop", "Idle"] {
+            if let slot = dict[slotKey] as? [String: Any],
+               let content = slot["Content"] as? [String: Any],
+               let choices = content["Choices"] as? [[String: Any]],
+               choices.contains(where: { ($0["Provider"] as? String) == imageProviderID }),
+               let optionsData = content["EncodedOptionValues"] as? Data,
+               !optionsData.isEmpty {
+                return optionsData
+            }
         }
 
         for (_, value) in dict {
@@ -343,7 +358,6 @@ public struct WallpaperIndexUpdater: Sendable {
     private static func choiceMatchesURI(_ choice: [String: Any], targetURI: String) -> Bool {
         let normalizedTarget = normalizeFileURI(targetURI)
 
-        // 1. Check binary plist Configuration -> url -> relative (primary format on macOS 15–27)
         if let configData = choice["Configuration"] as? Data,
            let configDict = try? PropertyListSerialization.propertyList(from: configData, options: [], format: nil) as? [String: Any],
            let urlDict = configDict["url"] as? [String: Any],
@@ -352,7 +366,6 @@ public struct WallpaperIndexUpdater: Sendable {
             return true
         }
 
-        // 2. Check Files -> relative (older Sonoma format)
         if let files = choice["Files"] as? [[String: Any]] {
             return files.contains { entry in
                 guard let relative = entry["relative"] as? String else { return false }
@@ -371,46 +384,120 @@ public struct WallpaperIndexUpdater: Sendable {
     }
 
     private static func makeFreshScopeDictionary(
+        target: WallpaperTarget,
         choice: [String: Any],
         encodedOptionValues: Data,
         now: Date
     ) -> [String: Any] {
         let entry = makeWallpaperSlot(existing: nil, choice: choice, encodedOptionValues: encodedOptionValues, now: now)
-        return [
-            "Desktop": entry,
-            "Type": "individual"
-        ]
+        switch target {
+        case .lockScreenOnly:
+            return [
+                "Idle": entry,
+                "Type": "individual"
+            ]
+        case .allScreensAndLockScreen, .screensAndSpacesOnly:
+            return [
+                "Desktop": entry,
+                "Type": "individual"
+            ]
+        }
     }
 
     private static func updateScopeDictionary(
         _ scope: [String: Any],
+        target: WallpaperTarget,
         choice: [String: Any],
         encodedOptionValues: Data,
         now: Date
     ) -> [String: Any] {
         var updated = scope
 
-        // Always update Desktop (controls active desktop + Lock Screen for static wallpapers).
-        let existingDesktop = updated["Desktop"] as? [String: Any]
-        updated["Desktop"] = makeWallpaperSlot(
-            existing: existingDesktop,
-            choice: choice,
-            encodedOptionValues: encodedOptionValues,
-            now: now
-        )
-
-        // Update Linked only if already present, and switch Type to "individual" so Desktop is authoritative
-        // while preserving the user's Idle (Screen Saver) configuration untouched.
-        if let existingLinked = updated["Linked"] as? [String: Any] {
-            updated["Linked"] = makeWallpaperSlot(
-                existing: existingLinked,
+        switch target {
+        case .allScreensAndLockScreen:
+            let existingDesktop = updated["Desktop"] as? [String: Any]
+            updated["Desktop"] = makeWallpaperSlot(
+                existing: existingDesktop,
                 choice: choice,
                 encodedOptionValues: encodedOptionValues,
                 now: now
             )
+            // If Idle was previously overridden by BingPaper (from Lock Screen Only mode),
+            // reset it to macOS's native "default" so the Lock Screen tracks Desktop cleanly
+            // while leaving any non-BingPaper Screen Saver (e.g. Aerials) untouched.
+            if let existingIdle = updated["Idle"] as? [String: Any],
+               isBingPaperManagedSlot(existingIdle) {
+                updated["Idle"] = makeDefaultIdleSlot(now: now)
+            }
+            if let existingLinked = updated["Linked"] as? [String: Any] {
+                updated["Linked"] = makeWallpaperSlot(
+                    existing: existingLinked,
+                    choice: choice,
+                    encodedOptionValues: encodedOptionValues,
+                    now: now
+                )
+            }
+            updated["Type"] = "individual"
+
+        case .screensAndSpacesOnly:
+            let existingDesktop = updated["Desktop"] as? [String: Any]
+            updated["Desktop"] = makeWallpaperSlot(
+                existing: existingDesktop,
+                choice: choice,
+                encodedOptionValues: encodedOptionValues,
+                now: now
+            )
+            // Leave Idle completely untouched so the Lock Screen / Screen Saver is preserved.
+            updated["Type"] = "individual"
+
+        case .lockScreenOnly:
+            // Leave Desktop completely untouched so every screen and Space keeps its current wallpaper.
+            let existingIdle = updated["Idle"] as? [String: Any]
+            updated["Idle"] = makeWallpaperSlot(
+                existing: existingIdle,
+                choice: choice,
+                encodedOptionValues: encodedOptionValues,
+                now: now
+            )
+            updated["Type"] = "individual"
         }
-        updated["Type"] = "individual"
+
         return updated
+    }
+
+    private static func isBingPaperManagedSlot(_ slot: [String: Any]) -> Bool {
+        guard let content = slot["Content"] as? [String: Any],
+              let choices = content["Choices"] as? [[String: Any]] else {
+            return false
+        }
+        return choices.contains { choice in
+            guard (choice["Provider"] as? String) == imageProviderID,
+                  let configData = choice["Configuration"] as? Data,
+                  let configDict = try? PropertyListSerialization.propertyList(from: configData, options: [], format: nil) as? [String: Any],
+                  let urlDict = configDict["url"] as? [String: Any],
+                  let relative = urlDict["relative"] as? String else {
+                return false
+            }
+            return relative.contains("/BingPaper/Wallpapers/") || relative.contains("bing-")
+        }
+    }
+
+    private static func makeDefaultIdleSlot(now: Date) -> [String: Any] {
+        [
+            "Content": [
+                "Choices": [
+                    [
+                        "Configuration": Data(),
+                        "Files": [[String: Any]](),
+                        "Provider": "default"
+                    ]
+                ],
+                "EncodedOptionValues": "$null",
+                "Shuffle": "$null"
+            ],
+            "LastSet": now,
+            "LastUse": now
+        ]
     }
 
     private static func makeWallpaperSlot(

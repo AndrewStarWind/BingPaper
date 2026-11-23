@@ -28,10 +28,13 @@ final class NotificationService {
         let content = UNMutableNotificationContent()
         content.title = "BingPaper Updated"
         content.subtitle = metadata.displayTitle
-        if report.allSpacesAndLockScreenSynced {
+        switch report.target {
+        case .allScreensAndLockScreen:
             content.body = "Applied to \(report.screensUpdated) display(s), all Spaces, and Lock Screen."
-        } else {
-            content.body = "Applied to \(report.screensUpdated) active display(s)."
+        case .screensAndSpacesOnly:
+            content.body = "Applied to \(report.screensUpdated) display(s) and all Spaces."
+        case .lockScreenOnly:
+            content.body = "Applied to Lock Screen."
         }
 
         let request = UNNotificationRequest(

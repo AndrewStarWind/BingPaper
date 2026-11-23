@@ -3,6 +3,7 @@ import Foundation
 
 public struct WallpaperApplyReport: Sendable, Equatable {
     public let imagePath: String
+    public let target: WallpaperTarget
     public let screensUpdated: Int
     public let allSpacesAndLockScreenSynced: Bool
     public let indexScopesUpdated: Int
@@ -10,12 +11,14 @@ public struct WallpaperApplyReport: Sendable, Equatable {
 
     public init(
         imagePath: String,
+        target: WallpaperTarget = .allScreensAndLockScreen,
         screensUpdated: Int,
         allSpacesAndLockScreenSynced: Bool,
         indexScopesUpdated: Int,
         warningMessage: String? = nil
     ) {
         self.imagePath = imagePath
+        self.target = target
         self.screensUpdated = screensUpdated
         self.allSpacesAndLockScreenSynced = allSpacesAndLockScreenSynced
         self.indexScopesUpdated = indexScopesUpdated
@@ -40,7 +43,7 @@ public enum WallpaperApplyError: LocalizedError, Sendable {
     }
 }
 
-/// Applies a wallpaper image to every connected screen, every Space, and the Lock Screen on macOS.
+/// Applies a wallpaper image to screens, Spaces, and/or the Lock Screen on macOS according to `WallpaperTarget`.
 public struct WallpaperApplier: Sendable {
     private let indexUpdater: WallpaperIndexUpdater
 
@@ -48,67 +51,67 @@ public struct WallpaperApplier: Sendable {
         self.indexUpdater = indexUpdater
     }
 
-    /// Applies `imageURL` across every screen using `NSWorkspace`, then synchronizes `Index.plist`
-    /// and reloads `WallpaperAgent` so all Spaces (active & inactive) and the Lock Screen match.
     public func applyWallpaper(
         at imageURL: URL,
         scalingMode: WallpaperScalingMode = .fillScreen,
-        syncAllSpacesAndLockScreen: Bool = true,
+        target: WallpaperTarget = .allScreensAndLockScreen,
         backupDirectory: URL? = nil
     ) async throws -> WallpaperApplyReport {
         guard FileManager.default.fileExists(atPath: imageURL.path) else {
             throw WallpaperApplyError.fileMissing(imageURL.path)
         }
 
-        let screensUpdated = try await MainActor.run {
-            let screens = NSScreen.screens
-            guard !screens.isEmpty else {
-                throw WallpaperApplyError.noScreensFound
-            }
-            let options = Self.desktopImageOptions(for: scalingMode)
-            for screen in screens {
-                do {
-                    try NSWorkspace.shared.setDesktopImageURL(imageURL, for: screen, options: options)
-                } catch {
-                    throw WallpaperApplyError.workspaceFailed(error.localizedDescription)
+        let screensUpdated: Int
+        if target == .lockScreenOnly {
+            // Do not touch active Desktop screens via NSWorkspace when applying to Lock Screen only.
+            screensUpdated = await MainActor.run { NSScreen.screens.count }
+        } else {
+            screensUpdated = try await MainActor.run {
+                let screens = NSScreen.screens
+                guard !screens.isEmpty else {
+                    throw WallpaperApplyError.noScreensFound
                 }
+                let options = Self.desktopImageOptions(for: scalingMode)
+                for screen in screens {
+                    do {
+                        try NSWorkspace.shared.setDesktopImageURL(imageURL, for: screen, options: options)
+                    } catch {
+                        throw WallpaperApplyError.workspaceFailed(error.localizedDescription)
+                    }
+                }
+                return screens.count
             }
-            return screens.count
+            BingPaperLog.wallpaper.info("NSWorkspace updated \(screensUpdated) active screen(s) to \(imageURL.lastPathComponent)")
+
+            // Allow WallpaperAgent a brief moment to flush its native Index.plist representation
+            // from the NSWorkspace update above so we can clone its exact OS-native EncodedOptionValues.
+            try? await Task.sleep(for: .milliseconds(350))
         }
-
-        BingPaperLog.wallpaper.info("NSWorkspace updated \(screensUpdated) active screen(s) to \(imageURL.lastPathComponent)")
-
-        guard syncAllSpacesAndLockScreen else {
-            return WallpaperApplyReport(
-                imagePath: imageURL.path,
-                screensUpdated: screensUpdated,
-                allSpacesAndLockScreenSynced: false,
-                indexScopesUpdated: 0
-            )
-        }
-
-        // Allow WallpaperAgent a brief moment to flush its native Index.plist representation
-        // from the NSWorkspace update above so we can clone its exact OS-native Choice structure.
-        try? await Task.sleep(for: .milliseconds(350))
 
         do {
             let result = try indexUpdater.applyWallpaper(
                 imageURL: imageURL,
                 scalingMode: scalingMode,
+                target: target,
                 backupDirectory: backupDirectory
             )
             Self.reloadWallpaperAgent()
-            BingPaperLog.wallpaper.info("Synced Index.plist across \(result.scopesUpdated) scope(s) (reusedNative=\(result.reusedNativeChoice)) and reloaded WallpaperAgent.")
+            BingPaperLog.wallpaper.info("Synced Index.plist (\(target.rawValue)) across \(result.scopesUpdated) scope(s) and reloaded WallpaperAgent.")
             return WallpaperApplyReport(
                 imagePath: imageURL.path,
+                target: target,
                 screensUpdated: screensUpdated,
                 allSpacesAndLockScreenSynced: true,
                 indexScopesUpdated: result.scopesUpdated
             )
         } catch {
+            if target == .lockScreenOnly {
+                throw error
+            }
             BingPaperLog.wallpaper.warning("Index.plist sync failed (active screens still updated): \(error.localizedDescription)")
             return WallpaperApplyReport(
                 imagePath: imageURL.path,
+                target: target,
                 screensUpdated: screensUpdated,
                 allSpacesAndLockScreenSynced: false,
                 indexScopesUpdated: 0,

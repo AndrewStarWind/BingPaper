@@ -194,4 +194,158 @@ struct WallpaperIndexUpdaterTests {
         #expect(choices.first?["CustomOS27Key"] as? String == "preserved")
         #expect(content["EncodedOptionValues"] as? Data == nativeOptionsBlob)
     }
+
+    @Test("Lock Screen Only updates Idle across all scopes while leaving Desktop untouched")
+    func lockScreenOnlyLeavesDesktopUntouched() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BingPaperLockOnly-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let indexURL = tempDir.appendingPathComponent("Index.plist")
+        let desktopImage = tempDir.appendingPathComponent("user-desktop.jpg")
+        let bingLockImage = tempDir.appendingPathComponent("bing-20261123-en-US-UHD.jpg")
+        try Data([0xFF, 0xD8, 0xFF, 0xE0]).write(to: desktopImage)
+        try Data([0xFF, 0xD8, 0xFF, 0xE0]).write(to: bingLockImage)
+
+        let desktopChoice = try WallpaperIndexUpdater.makeImageChoice(for: desktopImage)
+        let optionsBlob = try WallpaperIndexUpdater.makeDefaultEncodedOptionValues(scalingMode: .fillScreen)
+
+        let initialScope: [String: Any] = [
+            "Desktop": [
+                "Content": [
+                    "Choices": [desktopChoice],
+                    "EncodedOptionValues": optionsBlob,
+                    "Shuffle": "$null"
+                ]
+            ],
+            "Idle": [
+                "Content": [
+                    "Choices": [["Provider": "default", "Files": [], "Configuration": Data()]],
+                    "EncodedOptionValues": "$null",
+                    "Shuffle": "$null"
+                ]
+            ],
+            "Type": "individual"
+        ]
+
+        let root: [String: Any] = [
+            "AllSpacesAndDisplays": initialScope,
+            "SystemDefault": initialScope,
+            "Displays": ["DISPLAY-1": initialScope],
+            "Spaces": ["SPACE-1": ["Default": initialScope]]
+        ]
+
+        let data = try PropertyListSerialization.data(fromPropertyList: root, format: .binary, options: 0)
+        try data.write(to: indexURL)
+
+        let result = try WallpaperIndexUpdater().applyWallpaper(
+            imageURL: bingLockImage,
+            target: .lockScreenOnly,
+            toIndexAt: indexURL
+        )
+        #expect(result.scopesUpdated == 4)
+
+        let reloaded = try #require(
+            PropertyListSerialization.propertyList(from: Data(contentsOf: indexURL), options: [], format: nil) as? [String: Any]
+        )
+
+        func verifyLockOnly(_ scope: [String: Any]) throws {
+            // Desktop MUST still point to user-desktop.jpg
+            let desktop = try #require(scope["Desktop"] as? [String: Any])
+            let desktopChoices = try #require((desktop["Content"] as? [String: Any])?["Choices"] as? [[String: Any]])
+            let desktopCfg = try #require(desktopChoices.first?["Configuration"] as? Data)
+            let desktopDecoded = try #require(
+                PropertyListSerialization.propertyList(from: desktopCfg, options: [], format: nil) as? [String: Any]
+            )
+            let desktopURL = (desktopDecoded["url"] as? [String: Any])?["relative"] as? String
+            #expect(desktopURL == desktopImage.standardizedFileURL.absoluteString)
+
+            // Idle MUST point to bingLockImage
+            let idle = try #require(scope["Idle"] as? [String: Any])
+            let idleContent = try #require(idle["Content"] as? [String: Any])
+            let idleChoices = try #require(idleContent["Choices"] as? [[String: Any]])
+            #expect(idleChoices.first?["Provider"] as? String == WallpaperIndexUpdater.imageProviderID)
+            let idleCfg = try #require(idleChoices.first?["Configuration"] as? Data)
+            let idleDecoded = try #require(
+                PropertyListSerialization.propertyList(from: idleCfg, options: [], format: nil) as? [String: Any]
+            )
+            let idleURL = (idleDecoded["url"] as? [String: Any])?["relative"] as? String
+            #expect(idleURL == bingLockImage.standardizedFileURL.absoluteString)
+            #expect(idleContent["EncodedOptionValues"] is Data)
+        }
+
+        try verifyLockOnly(try #require(reloaded["AllSpacesAndDisplays"] as? [String: Any]))
+        try verifyLockOnly(try #require(reloaded["SystemDefault"] as? [String: Any]))
+        try verifyLockOnly(try #require((reloaded["Displays"] as? [String: Any])?["DISPLAY-1"] as? [String: Any]))
+        let space1 = try #require((reloaded["Spaces"] as? [String: Any])?["SPACE-1"] as? [String: Any])
+        try verifyLockOnly(try #require(space1["Default"] as? [String: Any]))
+    }
+
+    @Test("Screens & Spaces Only updates Displays and Spaces Desktop while leaving SystemDefault, AllSpacesAndDisplays, and Idle untouched")
+    func screensAndSpacesOnlyPreservesSystemDefaultAndIdle() throws {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("BingPaperDesktopOnly-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tempDir) }
+
+        let indexURL = tempDir.appendingPathComponent("Index.plist")
+        let lockImage = tempDir.appendingPathComponent("existing-lock.jpg")
+        let newDesktopImage = tempDir.appendingPathComponent("bing-20261123-en-US-UHD.jpg")
+        try Data([0xFF, 0xD8, 0xFF, 0xE0]).write(to: lockImage)
+        try Data([0xFF, 0xD8, 0xFF, 0xE0]).write(to: newDesktopImage)
+
+        let lockChoice = try WallpaperIndexUpdater.makeImageChoice(for: lockImage)
+        let optionsBlob = try WallpaperIndexUpdater.makeDefaultEncodedOptionValues(scalingMode: .fillScreen)
+
+        let lockScope: [String: Any] = [
+            "Desktop": ["Content": ["Choices": [lockChoice], "EncodedOptionValues": optionsBlob]],
+            "Idle": ["Content": ["Choices": [lockChoice], "EncodedOptionValues": optionsBlob]],
+            "Type": "individual"
+        ]
+
+        let root: [String: Any] = [
+            "AllSpacesAndDisplays": lockScope,
+            "SystemDefault": lockScope,
+            "Displays": ["DISPLAY-1": lockScope],
+            "Spaces": ["SPACE-1": ["Default": lockScope]]
+        ]
+
+        let data = try PropertyListSerialization.data(fromPropertyList: root, format: .binary, options: 0)
+        try data.write(to: indexURL)
+
+        let result = try WallpaperIndexUpdater().applyWallpaper(
+            imageURL: newDesktopImage,
+            target: .screensAndSpacesOnly,
+            toIndexAt: indexURL
+        )
+        #expect(result.scopesUpdated == 2)
+
+        let reloaded = try #require(
+            PropertyListSerialization.propertyList(from: Data(contentsOf: indexURL), options: [], format: nil) as? [String: Any]
+        )
+
+        func extractURL(from scope: [String: Any], slot: String) throws -> String? {
+            let slotDict = try #require(scope[slot] as? [String: Any])
+            let choices = try #require((slotDict["Content"] as? [String: Any])?["Choices"] as? [[String: Any]])
+            let cfg = try #require(choices.first?["Configuration"] as? Data)
+            let decoded = try #require(
+                PropertyListSerialization.propertyList(from: cfg, options: [], format: nil) as? [String: Any]
+            )
+            return (decoded["url"] as? [String: Any])?["relative"] as? String
+        }
+
+        // AllSpacesAndDisplays and SystemDefault must remain unchanged
+        #expect(try extractURL(from: try #require(reloaded["AllSpacesAndDisplays"] as? [String: Any]), slot: "Desktop") == lockImage.standardizedFileURL.absoluteString)
+        #expect(try extractURL(from: try #require(reloaded["SystemDefault"] as? [String: Any]), slot: "Desktop") == lockImage.standardizedFileURL.absoluteString)
+
+        // Displays and Spaces Desktop updated, Idle untouched
+        let display1 = try #require((reloaded["Displays"] as? [String: Any])?["DISPLAY-1"] as? [String: Any])
+        #expect(try extractURL(from: display1, slot: "Desktop") == newDesktopImage.standardizedFileURL.absoluteString)
+        #expect(try extractURL(from: display1, slot: "Idle") == lockImage.standardizedFileURL.absoluteString)
+
+        let space1Default = try #require(((reloaded["Spaces"] as? [String: Any])?["SPACE-1"] as? [String: Any])?["Default"] as? [String: Any])
+        #expect(try extractURL(from: space1Default, slot: "Desktop") == newDesktopImage.standardizedFileURL.absoluteString)
+        #expect(try extractURL(from: space1Default, slot: "Idle") == lockImage.standardizedFileURL.absoluteString)
+    }
 }

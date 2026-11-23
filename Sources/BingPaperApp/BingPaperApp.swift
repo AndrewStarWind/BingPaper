@@ -59,13 +59,13 @@ struct BingPaperLauncher {
                 let report = try await applier.applyWallpaper(
                     at: fileURL,
                     scalingMode: settings.scalingMode,
-                    syncAllSpacesAndLockScreen: settings.syncAllSpacesAndLockScreen,
+                    target: settings.wallpaperTarget,
                     backupDirectory: store.backupsDirectory
                 )
                 _ = try? store.pruneOldWallpapers(retentionDays: settings.retentionDays, keeping: fileURL.path)
 
                 print("BingPaper updated: \(metadata.displayTitle) (\(metadata.startdate))")
-                print("Screens updated: \(report.screensUpdated), All Spaces & Lock Screen synced: \(report.allSpacesAndLockScreenSynced) (\(report.indexScopesUpdated) scopes)")
+                print("Target: \(report.target.displayName), Screens: \(report.screensUpdated), Synced: \(report.allSpacesAndLockScreenSynced) (\(report.indexScopesUpdated) scopes)")
                 if let warning = report.warningMessage {
                     fputs("Warning: \(warning)\n", stderr)
                 }
