@@ -157,6 +157,42 @@ public struct WallpaperApplier: Sendable {
         }
     }
 
+    /// Lightweight check for the currently active Space on every connected screen.
+    /// Applies `imageURL` via `NSWorkspace` (without restarting `WallpaperAgent`) ONLY on screens
+    /// whose active Space does not already display `imageURL` — e.g. a brand-new Space created via Mission Control.
+    @MainActor
+    @discardableResult
+    public func syncActiveSpaceIfNeeded(
+        to imageURL: URL,
+        scalingMode: WallpaperScalingMode = .fillScreen
+    ) -> Int {
+        guard FileManager.default.fileExists(atPath: imageURL.path) else { return 0 }
+        let options = Self.desktopImageOptions(for: scalingMode)
+        var updatedCount = 0
+
+        for screen in NSScreen.screens {
+            if let currentURL = NSWorkspace.shared.desktopImageURL(for: screen),
+               Self.fileURLsMatch(currentURL, imageURL) {
+                continue
+            }
+            do {
+                try NSWorkspace.shared.setDesktopImageURL(imageURL, for: screen, options: options)
+                updatedCount += 1
+            } catch {
+                BingPaperLog.wallpaper.warning("Failed to sync active Space on \(screen.localizedName): \(error.localizedDescription)")
+            }
+        }
+
+        if updatedCount > 0 {
+            BingPaperLog.wallpaper.info("Synced newly created or out-of-sync Space on \(updatedCount) screen(s) to \(imageURL.lastPathComponent)")
+        }
+        return updatedCount
+    }
+
+    public static func fileURLsMatch(_ lhs: URL, _ rhs: URL) -> Bool {
+        lhs.resolvingSymlinksInPath().standardizedFileURL.path == rhs.resolvingSymlinksInPath().standardizedFileURL.path
+    }
+
     private static func desktopImageOptions(for scalingMode: WallpaperScalingMode) -> [NSWorkspace.DesktopImageOptionKey: Any] {
         switch scalingMode {
         case .fillScreen:

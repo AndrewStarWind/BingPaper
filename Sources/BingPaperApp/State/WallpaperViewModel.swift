@@ -53,9 +53,11 @@ final class WallpaperViewModel {
 
     private var scheduleTask: Task<Void, Never>?
     private var displayDebounceTask: Task<Void, Never>?
+    private var spaceDebounceTask: Task<Void, Never>?
     private var wakeObserver: NSObjectProtocol?
     private var dayChangeObserver: NSObjectProtocol?
     private var screenChangeObserver: NSObjectProtocol?
+    private var spaceChangeObserver: NSObjectProtocol?
     private var pathMonitor: NWPathMonitor?
     private var wasOffline: Bool = false
     private var hasBootstrapped: Bool = false
@@ -560,6 +562,31 @@ final class WallpaperViewModel {
                         scalingMode: self.settings.scalingMode,
                         target: self.settings.wallpaperTarget,
                         backupDirectory: self.store.backupsDirectory
+                    )
+                }
+            }
+        }
+
+        spaceChangeObserver = workspaceCenter.addObserver(
+            forName: NSWorkspace.activeSpaceDidChangeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self,
+                      !self.isUpdating,
+                      self.settings.wallpaperTarget != .lockScreenOnly,
+                      let current = self.currentEntry,
+                      FileManager.default.fileExists(atPath: current.localPath) else {
+                    return
+                }
+                self.spaceDebounceTask?.cancel()
+                self.spaceDebounceTask = Task {
+                    try? await Task.sleep(for: .milliseconds(150))
+                    guard !Task.isCancelled, !self.isUpdating else { return }
+                    _ = self.applier.syncActiveSpaceIfNeeded(
+                        to: current.fileURL,
+                        scalingMode: self.settings.scalingMode
                     )
                 }
             }

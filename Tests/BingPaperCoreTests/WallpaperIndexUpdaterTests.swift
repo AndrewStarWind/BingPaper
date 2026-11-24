@@ -348,4 +348,19 @@ struct WallpaperIndexUpdaterTests {
         #expect(try extractURL(from: space1Default, slot: "Desktop") == newDesktopImage.standardizedFileURL.absoluteString)
         #expect(try extractURL(from: space1Default, slot: "Idle") == lockImage.standardizedFileURL.absoluteString)
     }
+
+    @Test("WallpaperApplier.fileURLsMatch resolves symlinks and standardizes paths")
+    func fileURLsMatchResolvesSymlinks() throws {
+        let tempFile = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bingpaper-match-\(UUID().uuidString).jpg")
+        try Data([0xFF, 0xD8, 0xFF, 0xE0]).write(to: tempFile)
+        defer { try? FileManager.default.removeItem(at: tempFile) }
+
+        let resolved = tempFile.resolvingSymlinksInPath()
+        let other = FileManager.default.temporaryDirectory
+            .appendingPathComponent("bingpaper-other-\(UUID().uuidString).jpg")
+
+        #expect(WallpaperApplier.fileURLsMatch(tempFile, resolved) == true)
+        #expect(WallpaperApplier.fileURLsMatch(tempFile, other) == false)
+    }
 }
